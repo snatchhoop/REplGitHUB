@@ -1,0 +1,989 @@
+import flet as ft
+import json
+import subprocess
+import os
+import platform
+import asyncio
+import asyncssh
+import sys
+from cryptography.fernet import Fernet
+from functools import partial
+
+# Путь для хранения файла конфигурации в текущей рабочей директории
+CONFIG_DIR = os.path.join(os.getcwd(), "config")
+RDP_DIR = os.path.join(CONFIG_DIR, "rdp_connections")  # Папка для RDP-файлов
+CONFIG_FILE = os.path.join(CONFIG_DIR, "connections.json")
+DEFAULT_PROTOCOL = "mstsc"
+SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
+TELNET_SETTINGS_FILE = os.path.join(CONFIG_DIR, "telnet_settings.json")  # Файл настроек для Telnet
+KEY_FILE = os.path.join(CONFIG_DIR, "secret.key")
+
+# Создаем директорию, если она не существует
+if not os.path.exists(CONFIG_DIR):
+    os.makedirs(CONFIG_DIR)
+
+# Создаем директорию для RDP-файлов, если она не существует
+if not os.path.exists(RDP_DIR):
+    os.makedirs(RDP_DIR)
+
+# Создаем директорию, если она не существует
+if not os.path.exists(os.path.dirname(CONFIG_FILE)):
+    os.makedirs(os.path.dirname(CONFIG_FILE))
+
+
+def log(message):
+    print(f"[LOG] {message}")
+
+
+# --- CRYPTOGRAPHY FUNCTIONS ---
+def generate_key():
+    key = Fernet.generate_key()
+    with open(KEY_FILE, "wb") as key_file:
+        key_file.write(key)
+    log(f"Сгенерирован новый ключ: {key}")
+    return key
+
+
+def load_key():
+    try:
+        with open(KEY_FILE, "rb") as key_file:
+            key = key_file.read()
+            log(f"Ключ загружен из файла: {key}")
+            return key
+    except FileNotFoundError:
+        log("Файл с ключом не найден, генерируем новый.")
+        return generate_key()
+
+
+key = load_key()
+fernet = Fernet(key)
+
+
+def encrypt_password(password):
+    log(f"Шифруем пароль: {password}")
+    encrypted_password = fernet.encrypt(password.encode()).decode()
+    log(f"Зашифрованный пароль: {encrypted_password}")
+    return encrypted_password
+
+
+def decrypt_password(encrypted_password):
+    log(f"Дешифруем пароль: {encrypted_password}")
+    decrypted_password = fernet.decrypt(encrypted_password.encode()).decode()
+    log(f"Дешифрованный пароль: {decrypted_password}")
+    return decrypted_password
+
+
+def is_encrypted(password):
+    if not isinstance(password, str):
+        return False
+    try:
+        decrypt_password(password)
+        return True
+    except:
+        return False
+
+
+# --- END CRYPTOGRAPHY FUNCTIONS ---
+
+async def show_confirmation_dialog(page, title, content_text):
+    """Отображает диалоговое окно подтверждения и возвращает True, если пользователь нажал "Да"."""
+    confirmed = False
+    close_dlg = lambda e: page.close_dialog()
+
+    async def yes_click(e):
+        nonlocal confirmed
+        confirmed = True
+        page.close_dialog()
+
+    async def no_click(e):
+        nonlocal confirmed
+        confirmed = False
+        page.close_dialog()
+
+    page.dialog = ft.AlertDialog(
+        modal=True,
+        title=ft.Text(title),
+        content=ft.Text(content_text),
+        actions=[
+            ft.TextButton("Да", on_click=yes_click),
+            ft.TextButton("Нет", on_click=no_click),
+        ],
+        on_dismiss=close_dlg,
+    )
+    page.open_dialog(page.dialog)
+    await page.update_async()
+
+    # Ждем, пока диалог не будет закрыт
+    while page.dialog.open:
+        await asyncio.sleep(0.1)  # Небольшая задержка, чтобы избежать блокировки
+        await page.update_async()
+
+    return confirmed
+
+
+async def install_freerdp(page):
+    log("Проверка наличия FreeRDP...")
+    try:
+        subprocess.run(["xfreerdp", "/version"], check=True, capture_output=True)
+        log("FreeRDP уже установлен.")
+        return True
+    except FileNotFoundError:
+        log("FreeRDP не найден. Попытка установки...")
+        os_name = platform.system()
+
+        try:
+            if os_name == "Windows":
+                log("Установка FreeRDP для Windows...")
+                # Пример: использование Chocolatey для установки
+                confirmation = await show_confirmation_dialog(page, "Установка FreeRDP",
+                                                             "Будет произведена попытка установки FreeRDP с использованием Chocolatey.  Продолжить?")
+                if not confirmation:
+                    log("Установка FreeRDP отменена пользователем.")
+                    return False
+
+                try:
+                    subprocess.run(["choco", "install", "freerdp", "-y"], check=True)
+                except subprocess.CalledProcessError as e:
+                    log(f"Ошибка при установке Chocolatey пакета: {e}")
+                    page.add(ft.Text(f"Ошибка при установке Chocolatey пакета: {e}"))
+                    return False
+                freerdp_path = "C:\\ProgramData\\chocolatey\\bin"  # Путь по умолчанию, может потребоваться проверка
+                os.environ["PATH"] += os.pathsep + freerdp_path
+                log("FreeRDP успешно установлен для Windows.")
+                page.add(ft.Text("FreeRDP успешно установлен для Windows."))
+            elif os_name == "Linux":
+                log("Установка FreeRDP для Linux...")
+                # Пример: установка через apt (для Debian/Ubuntu)
+                confirmation = await show_confirmation_dialog(page, "Установка FreeRDP",
+                                                             "Будет произведена попытка установки FreeRDP с использованием apt.  Продолжить?")
+                if not confirmation:
+                    log("Установка FreeRDP отменена пользователем.")
+                    return False
+                subprocess.run(["sudo", "apt", "install", "freerdp2-x11", "-y"], check=True)
+                log("FreeRDP успешно установлен для Linux.")
+                page.add(ft.Text("FreeRDP успешно установлен для Linux."))
+            elif os_name == "Darwin":  # macOS
+                log("Установка FreeRDP для macOS...")
+                # Пример: установка через brew
+                confirmation = await show_confirmation_dialog(page, "Установка FreeRDP",
+                                                             "Будет произведена попытка установки FreeRDP с использованием brew.  Продолжить?")
+                if not confirmation:
+                    log("Установка FreeRDP отменена пользователем.")
+                    return False
+                subprocess.run(["brew", "install", "freerdp"], check=True)
+                log("FreeRDP успешно установлен для macOS.")
+                page.add(ft.Text("FreeRDP успешно установлен для macOS."))
+            else:
+                log(f"Неизвестная операционная система: {os_name}.  Установка FreeRDP не поддерживается автоматически.")
+                page.add(ft.Text(
+                    f"Неизвестная операционная система: {os_name}. Установка FreeRDP не поддерживается автоматически."))
+                return False
+
+            log("FreeRDP установлен. Обновление переменной PATH...")
+            os.environ["PATH"] += os.pathsep + "/usr/local/bin"  # Пример пути для Linux/macOS
+            log("Переменная PATH обновлена.")
+            page.add(ft.Text("Переменная PATH обновлена."))
+
+            return True
+        except subprocess.CalledProcessError as e:
+            log(f"Ошибка при установке FreeRDP: {e}")
+            page.add(ft.Text(f"Ошибка при установке FreeRDP: {e}"))
+            return False
+        except Exception as e:
+            log(f"Непредвиденная ошибка при установке FreeRDP: {e}")
+            page.add(ft.Text(f"Непредвиденная ошибка при установке FreeRDP: {e}"))
+            return False
+
+
+async def install_tightvnc(page):
+    log("Проверка наличия TightVNC...")
+    try:
+        subprocess.run(["tvnviewer", "-version"], check=True, capture_output=True)
+        log("TightVNC уже установлен.")
+        return True
+    except FileNotFoundError:
+        log("TightVNC не найден. Попытка установки...")
+        os_name = platform.system()
+
+        try:
+            if os_name == "Windows":
+                log("Установка TightVNC для Windows...")
+                confirmation = await show_confirmation_dialog(page, "Установка TightVNC",
+                                                             "Будет произведена попытка установки TightVNC с использованием Chocolatey.  Продолжить?")
+                if not confirmation:
+                    log("Установка TightVNC отменена пользователем.")
+                    return False
+                try:
+                    subprocess.run(["choco", "install", "tightvnc", "-y"], check=True)
+                except subprocess.CalledProcessError as e:
+                    log(f"Ошибка при установке Chocolatey пакета: {e}")
+                    page.add(ft.Text(f"Ошибка при установке Chocolatey пакета: {e}"))
+                    return False
+                tightvnc_path = "C:\\Program Files\\TightVNC"  # Путь по умолчанию, может потребоваться проверка
+                os.environ["PATH"] += os.pathsep + tightvnc_path
+                log("TightVNC успешно установлен для Windows.")
+                page.add(ft.Text("TightVNC успешно установлен для Windows."))
+            elif os_name == "Linux":
+                log("Установка TightVNC для Linux...")
+                confirmation = await show_confirmation_dialog(page, "Установка TightVNC",
+                                                             "Будет произведена попытка установки TightVNC с использованием apt.  Продолжить?")
+                if not confirmation:
+                    log("Установка TightVNC отменена пользователем.")
+                    return False
+                subprocess.run(["sudo", "apt", "install", "tightvncserver", "xtightvncviewer", "-y"], check=True)
+                log("TightVNC успешно установлен для Linux.")
+                page.add(ft.Text("TightVNC успешно установлен для Linux."))
+            elif os_name == "Darwin":  # macOS
+                log("Установка FreeRDP для macOS...")
+                confirmation = await show_confirmation_dialog(page, "Установка TightVNC",
+                                                             "Будет произведена попытка установки TightVNC с использованием brew.  Продолжить?")
+                if not confirmation:
+                    log("Установка TightVNC отменена пользователем.")
+                    return False
+                subprocess.run(["brew", "install", "tightvnc"], check=True)
+                log("FreeRDP успешно установлен для macOS.")
+                page.add(ft.Text("FreeRDP успешно установлен для macOS."))
+            else:
+                log(f"Неизвестная операционная система: {os_name}. Установка TightVNC не поддерживается автоматически.")
+                page.add(ft.Text(
+                    f"Неизвестная операционная система: {os_name}. Установка TightVNC не поддерживается автоматически."))
+                return False
+
+            log("TightVNC установлен. Обновление переменной PATH...")
+            os.environ["PATH"] += os.pathsep + "/usr/local/bin"  # Пример пути для Linux/macOS
+            log("Переменная PATH обновлена.")
+            page.add(ft.Text("Переменная PATH обновлена."))
+
+            return True
+        except subprocess.CalledProcessError as e:
+            log(f"Ошибка при установке TightVNC: {e}")
+            page.add(ft.Text(f"Ошибка при установке TightVNC: {e}"))
+            return False
+        except Exception as e:
+            log(f"Непредвиденная ошибка при установке TightVNC: {e}")
+            page.add(ft.Text(f"Непредвиденная ошибка при установке TightVNC: {e}"))
+            return False
+
+
+def load_connections():
+    log("Загрузка подключений из файла")
+    try:
+        if not os.path.exists(CONFIG_FILE):
+            log("Файл connections.json не найден, будет создан новый.")
+            return []
+        with open(CONFIG_FILE, "r", encoding='utf-8') as f:
+            connections = json.load(f)
+            log(f"Загружено {len(connections)} подключений.")
+            return connections
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        log(f"Ошибка при загрузке подключений: {e}")
+        return []
+
+
+def save_connections(connections):
+    log("Сохранение подключений в файл.")
+    try:
+        # Шифруем пароли перед сохранением
+        for conn in connections:
+            if 'password' in conn and conn['password'] and not is_encrypted(conn['password']):
+                conn['password'] = encrypt_password(conn['password'])
+
+        log(f"Сохраняемые подключения: {connections}")  # Добавлено логирование
+        with open(CONFIG_FILE, "w", encoding='utf-8') as f:
+            json.dump(connections, f, ensure_ascii=False, indent=4)
+            log("Подключения успешно сохранены.")
+    except Exception as e:
+        log(f"Ошибка при сохранении подключений: {e}")
+
+
+def is_rdp_connected():
+    # Проверка на наличие активных RDP-сессий
+    result = subprocess.run('query', shell=True, capture_output=True, text=True)
+    return "rdp-tcp" in result.stdout
+
+
+def connect_rdp(ip, username, password, page, protocol=DEFAULT_PROTOCOL):
+    log(f"Попытка подключения к {ip} с пользователем {username}. Используется протокол: {protocol}.")
+    try:
+        if protocol == "mstsc":
+            # Получаем имя файла RDP из списка подключений
+            connection_name = next((conn["name"] for conn in connections if conn["ip"] == ip and conn["username"] == username), None)
+            if connection_name:
+                rdp_file_name = f"{connection_name}.rdp"
+                rdp_file_path = os.path.join(RDP_DIR, rdp_file_name)
+
+                if os.path.exists(rdp_file_path):
+                    command = f'mstsc "{rdp_file_path}" /f'
+                    subprocess.run(command, shell=True, check=True)
+                else:
+                    log(f"RDP-файл не найден: {rdp_file_path}")
+                    page.add(ft.Text(f"RDP-файл не найден: {rdp_file_path}"))
+                    return
+            else:
+                log(f"Подключение с IP {ip} и именем пользователя {username} не найдено.")
+                page.add(ft.Text(f"Подключение с IP {ip} и именем пользователя {username} не найдено."))
+                return
+        # ... (Остальная логика для других протоколов без изменений)
+    except subprocess.CalledProcessError as e:
+        log(f"Ошибка при подключении: {e}")
+        page.add(ft.Text(f"Ошибка при подключении: {e}"))
+
+
+def connect_telnet(host, port, username, page):
+    log(f"Попытка подключения к telnet {host}:{port} с пользователем {username}.")
+    try:
+        os_name = platform.system()
+
+        if os_name == "Windows":
+            command = f'putty -telnet {host} {port}'
+            if username:
+                command += f' -l {username}'
+            # Пароль нельзя передать напрямую через командную строку PuTTY для Telnet
+
+        elif os_name in ["Linux", "Darwin"]:
+            command = f'telnet {host} {port}'
+
+        else:
+            log(f"Неизвестная операционная система: {os_name}. Подключение Telnet не поддерживается.")
+            page.add(ft.Text(f"Неизвестная операционная система: {os_name}. Подключение Telnet не поддерживается."))
+            return
+
+        log(f"Выполняемая команда: {command}")
+        subprocess.Popen(command, shell=True)  # Запускаем в новом процессе
+        page.add(ft.Text(f"Подключение к Telnet {host}:{port} инициировано."))
+    except Exception as e:
+        log(f"Ошибка при подключении к Telnet: {e}")
+        page.add(ft.Text(f"Ошибка при подключении к Telnet: {e}"))
+
+
+async def remove_connection(name, page, connections, rdp_tiles, telnet_tiles):
+    log(f"Удаление подключения: {name}.")
+
+    confirmation = await show_confirmation_dialog(page, "Удаление подключения",
+                                                 f"Вы уверены, что хотите удалить подключение '{name}'?")
+    if confirmation:
+        # Удаляем RDP-файл
+        rdp_file_name = f"{name}.rdp"
+        rdp_file_path = os.path.join(RDP_DIR, rdp_file_name)
+
+        if os.path.exists(rdp_file_path):
+            os.remove(rdp_file_path)
+            log(f"RDP-файл удален: {rdp_file_path}")
+        else:
+            log(f"RDP-файл не найден: {rdp_file_path}")
+
+        connections[:] = [conn for conn in connections if conn.get("name") != name]
+        save_connections(connections)
+        update_tiles(page, connections, rdp_tiles, telnet_tiles)
+    else:
+        log("Удаление подключения отменено пользователем.")
+
+
+def update_tiles(page, connections, rdp_tiles, telnet_tiles, protocol=None):
+    log("Обновление плиток для подключения.")
+    rdp_tiles.controls.clear()
+    telnet_tiles.controls.clear()
+
+    rdp_tile_list = []
+    telnet_tile_list = []
+
+    # Сортируем подключения по имени
+    rdp_connections = [conn for conn in connections if conn.get("protocol") != "telnet"]
+    rdp_connections.sort(key=lambda x: x.get("name", "").lower())
+
+    # Сортируем Telnet подключения по хосту
+    telnet_connections = [conn for conn in connections if conn.get("protocol") == "telnet"]
+    telnet_connections.sort(key=lambda x: x.get("host", "").lower())
+
+    for conn in rdp_connections:
+        if all(key in conn for key in ["name", "ip", "username"]):
+            # Обработка RDP-подключения
+            name = conn["name"]
+            ip = conn["ip"]
+            username = conn["username"]
+            password = conn["password"]
+            # Если протокол передан, используем его, иначе берем из настроек подключения, иначе дефолтный
+            conn_protocol = protocol if protocol else conn.get("protocol", DEFAULT_PROTOCOL)
+
+            popup_menu_button = ft.PopupMenuButton(
+                icon=ft.Icons.MORE_HORIZ,
+                tooltip="Конфигурация",
+                items=[
+                    ft.PopupMenuItem(
+                        text="Изменить",
+                        on_click=lambda e, name=name: open_edit_window(name, page, connections, rdp_tiles,
+                                                                      telnet_tiles)
+                    ),
+                    ft.PopupMenuItem(
+                        text="Удалить",
+                        on_click=lambda e, name=name: asyncio.create_task(
+                            remove_connection(name, page, connections, rdp_tiles, telnet_tiles))
+                    ),
+                ],
+            )
+
+            tile = ft.Container(
+                content=ft.Column(
+                    [
+                        ft.Container(
+                            content=ft.Row(
+                                [
+                                    popup_menu_button
+                                ],
+                                alignment=ft.MainAxisAlignment.END
+                            ),
+                            bgcolor="#272932",
+                            height=30,
+                            padding=0,
+                            border_radius=ft.BorderRadius(
+                                top_left=50,
+                                top_right=50,
+                                bottom_right=0,
+                                bottom_left=50,
+                            ),
+                        ),
+                        ft.ElevatedButton(
+                            f"{name} ({conn_protocol})",  # Отображаем протокол в кнопке
+                            height=100,
+                            width=220,
+                            on_click=lambda e, ip=ip, username=username, password=password, protocol=conn_protocol: connect_rdp(
+                                ip, username, password, page, protocol),
+                            style=ft.ButtonStyle(
+                                shape=ft.RoundedRectangleBorder(radius=ft.BorderRadius(
+                                    top_left=50,
+                                    top_right=0,
+                                    bottom_right=50,
+                                    bottom_left=0,
+                                ), ),
+                                bgcolor="#272932"
+                            )
+                        ),
+                    ],
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                width=220,
+                padding=5,
+            )
+
+            rdp_tile_list.append(tile)
+
+    for conn in telnet_connections:
+        # Обработка Telnet-подключения
+        host = conn.get("host")
+        port = conn.get("port")
+        username = conn.get("username")
+        password = conn.get("password")
+        conn_protocol = "telnet"  # Явно устанавливаем протокол telnet
+
+        popup_menu_button = ft.PopupMenuButton(
+            icon=ft.Icons.MORE_HORIZ,
+            tooltip="Конфигурация",
+            items=[
+                ft.PopupMenuItem(
+                    text="Изменить",
+                    # on_click=lambda e, host=host: open_edit_telnet_window(host, page, connections, tiles)  # TODO: Implement edit window for Telnet
+                ),
+                ft.PopupMenuItem(
+                    text="Удалить",
+                    # on_click=lambda e, host=host: remove_connection(host, page, connections, tiles) # TODO: Implement remove connection for Telnet
+                ),
+            ],
+        )
+
+        tile = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                popup_menu_button
+                            ],
+                            alignment=ft.MainAxisAlignment.END
+                        ),
+                        bgcolor="#272932",
+                        height=30,
+                        padding=0,
+                        border_radius=ft.BorderRadius(
+                            top_left=50,
+                            top_right=50,
+                            bottom_right=0,
+                            bottom_left=50,
+                        ),
+                    ),
+                    ft.ElevatedButton(
+                        f"{host}:{port} ({conn_protocol})",  # Отображаем хост и порт в кнопке
+                        height=100,
+                        width=220,
+                        on_click=lambda e, host=host, port=port, username=username, password=password: connect_telnet(
+                            host, port, username, password, page),
+                        style=ft.ButtonStyle(
+                            shape=ft.RoundedRectangleBorder(radius=ft.BorderRadius(
+                                top_left=50,
+                                top_right=0,
+                                bottom_right=50,
+                                bottom_left=0,
+                            ), ),
+                            bgcolor="#272932"
+                        )
+                    ),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            width=220,
+            padding=5,
+        )
+        telnet_tile_list.append(tile)
+
+    rdp_tiles.controls.append(
+        ft.Row(
+            controls=rdp_tile_list,
+            wrap=True,
+            spacing=10,
+            run_spacing=10,
+            vertical_alignment=ft.CrossAxisAlignment.START,
+        )
+    )
+
+    telnet_tiles.controls.append(
+        ft.Row(
+            controls=telnet_tile_list,
+            wrap=True,
+            spacing=10,
+            run_spacing=10,
+            vertical_alignment=ft.CrossAxisAlignment.START,
+        )
+    )
+    page.update()
+
+
+def open_edit_window(name, page, connections, rdp_tiles, telnet_tiles):
+    log(f"Открытие окна редактирования для подключения: {name}.")
+    connection = next((conn for conn in connections if conn.get("name") == name), None)
+
+    if connection:
+        log(f"Найдено подключение для редактирования: {connection}")
+
+        new_name_input = ft.TextField(label="Название подключения", value=connection["name"])
+        new_ip_input = ft.TextField(label="Адрес сервера", value=connection["ip"])
+        new_username_input = ft.TextField(label="Имя пользователя", value=connection["username"])
+        new_password_input = ft.TextField(label="Пароль", password=True, value=connection["password"])
+        protocol_dropdown = ft.Dropdown(
+            label="Выберите протокол",
+            value=connection.get("protocol", load_protocol_from_config()),  # Текущий протокол подключения
+            options=[
+                ft.DropdownOption("mstsc", "mstsc"),
+                ft.DropdownOption("freerdp", "freerdp"),
+                ft.DropdownOption("vnc", "vnc")
+            ],
+        )
+
+        def close_edit_window(e):
+            log("Закрытие окна редактирования.")
+            page.dialog.open = False
+            page.update()
+
+        save_button = ft.ElevatedButton("Сохранить изменения",
+                                        on_click=lambda e: save_edited_connection(connection, new_name_input,
+                                                                                  new_ip_input, new_username_input,
+                                                                                  new_password_input, protocol_dropdown,
+                                                                                  page, connections, rdp_tiles,
+                                                                                  telnet_tiles))
+        cancel_button = ft.ElevatedButton("Отменить", on_click=close_edit_window)
+
+        edit_window_content = ft.Column(
+            controls=[new_name_input, new_ip_input, new_username_input, new_password_input, protocol_dropdown],
+            spacing=10)
+
+        if not hasattr(page, "dialog"):
+            page.dialog = ft.AlertDialog(title=ft.Text("Редактировать подключение"), content=edit_window_content,
+                                         actions=[save_button, cancel_button])
+
+        page.add(page.dialog)
+
+        page.dialog.content = edit_window_content
+        page.dialog.open = True
+        page.update()
+
+        log("Окно редактирования должно открыться.")
+    else:
+        log("Подключение не найдено!")
+
+
+def save_edited_connection(connection, new_name_input, new_ip_input, new_username_input, new_password_input,
+                           protocol_dropdown, page,
+                           connections, rdp_tiles, telnet_tiles):
+    log("Сохранение изменений подключения.")
+    new_name = new_name_input.value
+    new_ip = new_ip_input.value
+    new_username = new_username_input.value
+    new_password = new_password_input.value
+    new_protocol = protocol_dropdown.value
+
+    if new_name and new_ip and new_username and new_password:
+        log("Все поля заполнены, обновляем подключение.")
+        connection["name"] = new_name
+        connection["ip"] = new_ip
+        connection["username"] = new_username
+        connection["password"] = new_password
+        connection["protocol"] = new_protocol  # Сохраняем выбранный протокол
+        save_connections(connections)
+        update_tiles(page, connections, rdp_tiles, telnet_tiles)
+        log("Изменения сохранены.")
+        page.dialog.open = False
+        page.update()
+    else:
+        log("Не все поля заполнены.")
+        page.add(ft.Text("Все поля должны быть заполнены."))
+
+
+def open_add_window(page, connections, rdp_tiles, telnet_tiles, is_telnet=False):
+    log("Открытие окна добавления нового подключения.")
+
+    if is_telnet:
+        new_host_input = ft.TextField(label="IP адрес или имя хоста")
+        new_port_input = ft.TextField(label="Порт", value="23")  # Default Telnet port
+        new_username_input = ft.TextField(label="Имя пользователя")
+        new_password_input = ft.TextField(label="Пароль", password=True)
+        window_title = "Добавить новое Telnet подключение"
+        window_content = ft.Column(
+            controls=[new_host_input, new_port_input, new_username_input, new_password_input],
+            spacing=10)
+    else:
+        new_name_input = ft.TextField(label="Название подключения")
+        new_ip_input = ft.TextField(label="Адрес сервера")
+        new_username_input = ft.TextField(label="Имя пользователя")
+        new_password_input = ft.TextField(label="Пароль", password=True)
+        protocol_dropdown = ft.Dropdown(
+            label="Выберите протокол",
+            value=load_protocol_from_config(),  # Текущий протокол из настроек
+            options=[
+                ft.DropdownOption("mstsc", "mstsc"),
+                ft.DropdownOption("freerdp", "freerdp"),
+                ft.DropdownOption("vnc", "vnc")
+            ],
+        )
+        window_title = "Добавить новое RDP подключение"
+        window_content = ft.Column(
+            controls=[new_name_input, new_ip_input, new_username_input, new_password_input, protocol_dropdown],
+            spacing=10)
+
+    def close_add_window(e):
+        log("Закрытие окна добавления.")
+        page.dialog.open = False
+        page.update()
+
+    save_button = ft.ElevatedButton("Добавить подключение",
+                                    on_click=lambda e: add_connection(
+                                        *(
+                                            (new_host_input, new_port_input, new_username_input, new_password_input)
+                                            if is_telnet
+                                            else (new_name_input, new_ip_input, new_username_input, new_password_input,
+                                                  protocol_dropdown)
+                                        ),
+                                        page, connections, rdp_tiles, telnet_tiles, is_telnet
+                                    ))
+    cancel_button = ft.ElevatedButton("Отменить", on_click=close_add_window)
+
+    def submit_add_window(e):
+        add_connection(
+            *(
+                (new_host_input, new_port_input, new_username_input, new_password_input)
+                if is_telnet
+                else (new_name_input, new_ip_input, new_username_input, new_password_input, protocol_dropdown)
+            ),
+            page, connections, rdp_tiles, telnet_tiles, is_telnet
+        )
+
+    if not hasattr(page, "dialog"):
+        page.dialog = ft.AlertDialog(
+            title=ft.Text(window_title),
+            content=window_content,
+            actions=[save_button, cancel_button],
+            on_dismiss=lambda e: print("Dialog was dismissed!"),
+        )
+
+    page.add(page.dialog)
+
+    page.dialog.content = window_content
+    page.dialog.open = True
+    page.on_keyboard_event = lambda e: submit_add_window(e) if e.key == "Enter" else None
+    page.update()
+
+
+def add_connection(name_or_host_input, ip_or_port_input, username_input, password_input, page, connections, rdp_tiles,
+                   telnet_tiles, is_telnet=False):
+    if is_telnet:
+        new_host = name_or_host_input.value
+        new_port = ip_or_port_input.value
+        new_username = username_input.value
+        new_password = password_input.value
+
+        if new_host and new_port and new_username and new_password:
+            log("Все поля для Telnet заполнены, добавляем подключение.")
+            # Шифруем пароль перед добавлением в список
+            encrypted_password = encrypt_password(new_password)
+            new_connection = {
+                "host": new_host,
+                "port": new_port,
+                "username": new_username,
+                "password": encrypted_password,  # Сохраняем зашифрованный пароль
+                "protocol": "telnet"  # Протокол для Telnet
+            }
+
+            connections.append(new_connection)
+            save_connections(connections)
+            update_tiles(page, connections, rdp_tiles, telnet_tiles)
+            log("Telnet подключение добавлено.")
+            page.dialog.open = False
+            page.update()
+        else:
+            log("Не все поля для Telnet заполнены.")
+            page.add(ft.Text("Все поля должны быть заполнены."))
+    else:
+        new_name = name_or_host_input.value
+        new_ip = ip_or_port_input.value
+        new_username = username_input.value
+        new_password = password_input.value
+        # protocol = load_protocol_from_config()  # Загружаем текущий протокол из конфигурации
+
+        if new_name and new_ip and new_username and new_password:
+            log("Все поля для RDP заполнены, добавляем подключение.")
+            # Шифруем пароль перед добавлением в список
+            encrypted_password = encrypt_password(new_password)
+            new_connection = {
+                "name": new_name,
+                "ip": new_ip,
+                "username": new_username,
+                "password": encrypted_password,  # Сохраняем зашифрованный пароль
+                "protocol": "mstsc"  # Протоocol mstsc для RDP
+            }
+            connections.append(new_connection)
+            save_connections(connections)
+            update_tiles(page, connections, rdp_tiles, telnet_tiles)
+            log("RDP подключение добавлено.")
+            page.dialog.open = False
+            page.update()
+        else:
+            log("Не все поля для RDP заполнены.")
+            page.add(ft.Text("Все поля должны быть заполнены."))
+
+def open_settings_window(page, main_container, settings_container, settings_tabs):
+        log("Открытие окна настроек.")
+        main_container.visible = False
+        settings_container.visible = True
+        page.update()
+
+def close_settings_window(page, main_container, settings_container, protocol_dropdown, install_protocols_checkbox,
+                              connections, rdp_tiles, telnet_tiles):
+        log("Закрытие окна настроек, возвращение в главное меню.")
+        settings_container.visible = False
+        main_container.visible = True
+        new_protocol = protocol_dropdown.value
+        save_protocol_to_config(new_protocol)
+
+        install_protocols = install_protocols_checkbox.value
+        save_install_protocols_to_config(install_protocols)
+
+        # Обновляем протокол для каждого подключения в списке connections
+        for conn in connections:
+            if conn.get('protocol') != 'telnet':
+                conn['protocol'] = new_protocol
+        save_connections(connections)  # Сохраняем изменения в connections.json
+
+        page.update()
+        update_tiles(page, connections, rdp_tiles, telnet_tiles,
+                     new_protocol)  # Передаем протокол для обновления плиток
+
+def load_protocol_from_config():
+        try:
+            if not os.path.exists(SETTINGS_FILE):
+                return DEFAULT_PROTOCOL
+            with open(SETTINGS_FILE, "r", encoding='utf-8') as f:
+                config = json.load(f)
+                return config.get("protocol", DEFAULT_PROTOCOL)
+        except (json.JSONDecodeError, FileNotFoundError):
+            return DEFAULT_PROTOCOL
+
+def load_install_protocols_from_config():
+        try:
+            if not os.path.exists(SETTINGS_FILE):
+                return True  # По умолчанию устанавливаем протоколы
+            with open(SETTINGS_FILE, "r", encoding='utf-8') as f:
+                config = json.load(f)
+                return config.get("install_protocols", True)  # По умолчанию устанавливаем протоколы
+        except (json.JSONDecodeError, FileNotFoundError):
+            return True
+
+def save_protocol_to_config(protocol):
+        try:
+            if not os.path.exists(CONFIG_DIR):
+                os.makedirs(CONFIG_DIR)
+            config = {"protocol": protocol}
+            with open(SETTINGS_FILE, "w", encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=4)
+            log(f"Протокол {protocol} сохранен в настройки.")
+        except Exception as e:
+            log(f"Ошибка при сохранении протокола: {e}")
+
+def save_install_protocols_to_config(install_protocols):
+        try:
+            if not os.path.exists(CONFIG_DIR):
+                os.makedirs(CONFIG_DIR)
+            config = {"install_protocols": install_protocols}
+            with open(SETTINGS_FILE, "w", encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=4)
+            log(f"Настройка установки протоколов сохранена: {install_protocols}")
+        except Exception as e:
+            log(f"Ошибка при сохранении настройки установки протоколов: {e}")
+
+def main(page: ft.Page):
+        log("Запуск приложения.")
+        page.title = "RDP Client Manager"
+        page.vertical_alignment = ft.MainAxisAlignment.START
+
+        # Загрузка настроек установки протоколов
+        install_protocols = load_install_protocols_from_config()
+
+        # Установка FreeRDP и TightVNC, если настройка включена
+        if install_protocols:
+            if not install_freerdp():
+                page.add(ft.Text("Не удалось установить FreeRDP.  Пожалуйста, установите его вручную."))
+                return
+
+            if not install_tightvnc():
+                page.add(ft.Text("Не удалось установить TightVNC.  Пожалуйста, установите его вручную."))
+                return
+
+        # Загрузка подключений и протокола
+        connections = load_connections()
+        protocol = load_protocol_from_config()
+
+        # Контейнеры для кнопок и настроек
+        rdp_header = ft.Row(
+            controls=[
+                ft.ElevatedButton(" + Добавить",
+                                  on_click=lambda e: open_add_window(page, connections, rdp_tiles, telnet_tiles)),
+                ft.IconButton(ft.Icons.SETTINGS,
+                              on_click=lambda e: open_settings_window(page, main_container, settings_container,
+                                                                      settings_tabs))
+            ],
+            alignment=ft.MainAxisAlignment.END
+        )
+
+        telnet_header = ft.Row(
+            controls=[
+                ft.ElevatedButton(" + Добавить",
+                                  on_click=lambda e: open_add_window(page, connections, rdp_tiles, telnet_tiles,
+                                                                     is_telnet=True)),
+                ft.IconButton(ft.Icons.SETTINGS,
+                              on_click=lambda e: open_settings_window(page, main_container, settings_container,
+                                                                      settings_tabs))
+            ],
+            alignment=ft.MainAxisAlignment.END
+        )
+
+        # Контейнеры для основного контента и настроек
+        rdp_tiles = ft.Column()
+        telnet_tiles = ft.Column()
+        main_container = ft.Column(controls=[], visible=True)
+        settings_container = ft.Column(controls=[], visible=False)
+
+        protocol_dropdown = ft.Dropdown(
+            label="Выберите протокол",
+            value=protocol,
+            options=[
+                ft.DropdownOption("mstsc", "mstsc"),
+                ft.DropdownOption("freerdp", "freerdp"),
+                ft.DropdownOption("vnc", "vnc")
+            ],
+        )
+
+        install_protocols_checkbox = ft.Checkbox(
+            label="Автоматически устанавливать FreeRDP и TightVNC",
+            value=install_protocols,
+        )
+
+        # Вкладки для главного меню
+        main_tabs = ft.Tabs(
+            animation_duration=300,
+            tabs=[
+                ft.Tab(
+                    text="RDP",
+                    content=ft.Column([rdp_header, rdp_tiles])
+                ),
+                ft.Tab(
+                    text="Telnet",
+                    content=ft.Column([telnet_header, telnet_tiles])
+                ),
+            ],
+            expand=1
+        )
+
+        # Вкладки для окна настроек
+        settings_tabs = ft.Tabs(
+            expand=True,
+            animation_duration=300,
+            label_color=ft.Colors.BLUE_GREY_900,
+            unselected_label_color=ft.Colors.GREY_600,
+            indicator_color=ft.Colors.BLUE_GREY_900,
+            tabs=[
+                ft.Tab(
+                    height=70,
+                    text="RDP",
+                    content=ft.Column([
+                        ft.Text("Настройки для RDP"),
+                        ft.Row([
+                            ft.Text("Выберите протокол:"),
+                            protocol_dropdown
+                        ], alignment=ft.MainAxisAlignment.START),
+                    ])
+                ),
+                ft.Tab(
+                    height=70,
+                    text="Общие",
+                    content=ft.Column([
+                        ft.Text("Общие настройки"),
+                        ft.Row([
+                            install_protocols_checkbox
+                        ], alignment=ft.MainAxisAlignment.START),
+                    ])
+                ),
+            ],
+        )
+
+    def close_settings_window_event(e):
+            close_settings_window(page, main_container, settings_container,
+                                  protocol_dropdown, install_protocols_checkbox, connections, rdp_tiles, telnet_tiles)
+
+        settings_container.controls = [
+            ft.Row(
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                controls=[
+                    ft.ElevatedButton("Назад", on_click=close_settings_window_event),
+                    ft.Text("Настройки", size=20),
+                    ft.Container()  # Пустой контейнер для выравнивания
+                ]
+            ),
+            settings_tabs,  # Добавляем вкладки настроек
+        ]
+
+        main_container.controls = [main_tabs]
+
+        # Обработчик нажатия ESC
+    def on_keyboard(e: ft.KeyboardEvent):
+            if e.key == "Escape":
+                if settings_container.visible:
+                    close_settings_window(page, main_container, settings_container,
+                                          protocol_dropdown, install_protocols_checkbox, connections, rdp_tiles,
+                                          telnet_tiles)
+                    page.update()
+
+        page.on_keyboard_event = on_keyboard
+
+        page.add(main_container, settings_container)
+
+        update_tiles(page, connections, rdp_tiles, telnet_tiles)
+        page.update()
+
+ft.app(target=main)
+

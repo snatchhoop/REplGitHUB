@@ -1,0 +1,3 @@
+# Путь для хранения файла конфигурации в каталоге APPDATA
+#APPDATA_DIR = os.getenv("APPDATA")  # Путь к каталогу с пользовательскими данными
+#CONFIG_FILE = os.path.join(APPDATA_DIR, "RDPClientManager", "connections.json")

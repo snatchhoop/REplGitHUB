@@ -1,0 +1,111 @@
+[
+    {
+        "name": "qqq",
+        "ip": "www",
+        "username": "eee",
+        "password": "gAAAAABnwEnLzYuZ1WAweTABSdUi9lpBbrU07CMw1jc6LMS98HvfACFSeAwof59eOuj3iOkrFaDlSuHp2m3T-SEgNbl4e3cBZQ==",
+        "protocol": "mstsc"
+    },
+    {
+        "name": "server",
+        "ip": "192.168.1.90",
+        "username": "server",
+        "password": "gAAAAABnwEnLlylu1HtMVld15rp9elStkNiOsg9RqnQnVTJjmvmJCCuNzhl30yfsGnUXxhm3k5CvyGDbDcqbHm4FSHeqyuTXcA==",
+        "protocol": "mstsc"
+    },
+    {
+        "name": "всыа",
+        "ip": "ыфва",
+        "username": "ывфа",
+        "password": "gAAAAABnwEnL9f0lhZnNK8htOpFCbZYfIVPhD-CoQnm8fgl1C6_gIaLFGFvFlm8nppRwTytkfMRFhqtaQZfdpkJIy450cvMxAA==",
+        "protocol": "mstsc"
+    },
+    {
+        "name": "вып",
+        "ip": "выап",
+        "username": "ывап",
+        "password": "gAAAAABnwEnL9ATuja1EDq1Yc_TnXLscwmz8vLsnGYLtO2ZZQiN9KUYxxCbIS7UdRvGcP1-UHatCuuCamyG5UlTvpWyQULLVVw==",
+        "protocol": "mstsc"
+    },
+    {
+        "name": "вяп",
+        "ip": "пвапва",
+        "username": "р",
+        "password": "gAAAAABnwEnL_9bM1r3giit9y1m3qSpU4RIE-4siYHxS27HEh6sk7kKZwhqx2HmcQY1XwPQvwEOgOOcYjppJKX4rSrIOf3N4RQ==",
+        "protocol": "mstsc"
+    },
+    {
+        "name": "Подключение 1",
+        "protocol": "mstsc"
+    },
+    {
+        "name": "фыавс",
+        "ip": "фаы",
+        "username": "ываф",
+        "password": "gAAAAABnwEnLMCmbPALiruUgSXFUxtIraOHdxVPqPqWXdBFSyIke416DB-_39MxnAZ8y69E0yJxtbE5aEfjk_jX8zyU9-bhvEQ==",
+        "protocol": "mstsc"
+    },
+    {
+        "name": "фыаыф",
+        "ip": "ыфав",
+        "username": "фыа",
+        "password": "gAAAAABnwEnLLix9kGuVnv-RwwJ-QakPvPF4EIz13WEnnCDgkAzufcg9fhiJKIckUxVInKqSL0MR1lxfamExVJXKxHKDueZ2LQ==",
+        "protocol": "mstsc"
+    },
+    {
+        "name": "ыва",
+        "ip": "афпв",
+        "username": "ывп",
+        "password": "gAAAAABnwEnLAwc28c7uyJxsmdw93t1bOOMQkXWRxc3RY8GCJpwXDWixlw_do8TX67fr46ASB1yUD7IHGHYhteLF2ARBHH31SQ==",
+        "protocol": "mstsc"
+    },
+    {
+        "name": "ываф",
+        "ip": "ыфва",
+        "username": "ыфа",
+        "password": "gAAAAABnwEnLud67arOwNuhSz_JyDYmrw6Va7WDwRaEEKwDIgoAcbMWZrv-xYEFAPWJNcXZABorvs6C5QOToVag_efz5jx19nQ==",
+        "protocol": "mstsc"
+    },
+    {
+        "host": "192.168.1.90",
+        "port": "23",
+        "username": "server",
+        "password": "gAAAAABnwFXAuaMKrSvh-Ml8JGS1pkli6Q70sEGFihE2ncLXzzS9m00cXJHmfAI0mgXD6GmZsMx23JO3v7riMvOcPQX1SXfllQ==",
+        "protocol": "telnet"
+    },
+    {
+        "host": "192.168.1.90",
+        "port": "23",
+        "username": "server",
+        "password": "gAAAAABnwFeGPu6xCXKSxH8LD3EWp_ZrtDblrrbG7lo2sqPO7V8XISFm8EeABfW-VVNmWfMdZ7lpjXFBq5QIsijjku4wRZBF4A==",
+        "protocol": "telnet"
+    },
+    {
+        "host": "192.168.1.90",
+        "port": "23",
+        "username": "server",
+        "password": "gAAAAABnwFhdPDc6MyX4JT_lRZTJ1SO6feRGDH87VSxFL38ar_MaLtGLQzQkhU5mGFSeJEwVUsnW02Mc3I3SpAqtdGRQHYT2Yg==",
+        "protocol": "telnet"
+    },
+    {
+        "host": "ап",
+        "port": "23",
+        "username": "пваы",
+        "password": "gAAAAABnwHZ3KipEe70MzU481DHurTkWwzo7dZBQ8u-J9ioFhY-IMLUPPK9jEO_LgDcVyRCZ0EW1BbzqHzEFQvCJGcUo7NyB4g==",
+        "protocol": "telnet"
+    },
+    {
+        "host": "ап",
+        "port": "23",
+        "username": "пваы",
+        "password": "gAAAAABnwHZ-0JoP-VEAEzRUeWXGnWPg6ktsQZSRaOjL1Vtfy2I0R8KDHvQGsAKOuC5E3dKFaCzrv0NRfEgHw0GBYaifgD-dBA==",
+        "protocol": "telnet"
+    },
+    {
+        "host": "ап",
+        "port": "23",
+        "username": "пваы",
+        "password": "gAAAAABnwHaL0ZtvBjr6l9CbUu0L4PTfRNhuU4yBzDF-4JUcR7pqEqLT7S9HVBmPo1RCUXfQY7t3RZ_N6ACW8JS6rsVz8f8sGQ==",
+        "protocol": "telnet"
+    }
+]
